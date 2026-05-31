@@ -385,7 +385,15 @@ body:not(.auth-locked) .user-bar{
   </div>
   <div class="dash-grid">
     <div class="card">
-      <div class="card-header"><h3>📅 Upcoming Trainings</h3><span id="upcomingCount" style="font-size:12px;color:var(--muted)"></span></div>
+      <div class="card-header">
+        <h3>📅 Upcoming Trainings</h3>
+        <div style="display:flex;align-items:center;gap:8px">
+          <span id="upcomingCount" style="font-size:12px;color:var(--muted)"></span>
+          <button class="btn btn-outline btn-sm" onclick="shiftUpcomingWeek(-1)" title="Previous week">&#8592;</button>
+          <button class="btn btn-outline btn-sm" onclick="shiftUpcomingWeek(0)" id="upcomingTodayBtn" title="Back to current week" style="display:none">Today</button>
+          <button class="btn btn-outline btn-sm" onclick="shiftUpcomingWeek(1)" title="Next week">&#8594;</button>
+        </div>
+      </div>
       <div class="card-body" id="upcomingList"></div>
     </div>
     <div class="card">
@@ -471,6 +479,17 @@ body:not(.auth-locked) .user-bar{
         </div>
         <div class="form-group"><label>Date From</label><input id="t-dateFrom" type="date"></div>
         <div class="form-group"><label>Date To</label><input id="t-dateTo" type="date"></div>
+        <div class="form-group full">
+          <label>Weekly Recurrence Day <span style="color:var(--muted);font-weight:400;font-size:11px">(for season-long / multi-week trainings conducted once a week)</span></label>
+          <select id="t-weeklyDay">
+            <option value="">— Not recurring (one-time or daily) —</option>
+            <option value="1">Every Monday</option>
+            <option value="2">Every Tuesday</option>
+            <option value="3">Every Wednesday</option>
+            <option value="4">Every Thursday</option>
+            <option value="5">Every Friday</option>
+          </select>
+        </div>
         <input id="t-timeStart" type="hidden">
         <input id="t-timeEnd" type="hidden">
         <div class="form-group full">
@@ -1448,6 +1467,7 @@ function openModal(type,id){
       updateActivityDropdown(t.title);
       document.getElementById('t-dateFrom').value=t.dateFrom;
       document.getElementById('t-dateTo').value=t.dateTo;
+      document.getElementById('t-weeklyDay').value=t.weeklyDay||'';
       document.getElementById('t-timeStart').value=t.timeStart;
       document.getElementById('t-timeEnd').value=t.timeEnd;
       { const vsel=document.getElementById('t-venue'); if(t.venue && ![...vsel.options].some(o=>o.value===t.venue)){ const o=document.createElement('option');o.value=t.venue;o.textContent=t.venue;o.dataset.custom='1';vsel.insertBefore(o,vsel.options[vsel.options.length-1]); } vsel.value=t.venue||''; }
@@ -1461,6 +1481,7 @@ function openModal(type,id){
       document.getElementById('trainingModalTitle').textContent='Add Training';
       ['t-title','t-logistics','t-remarks'].forEach(i=>document.getElementById(i).value='');
       ['t-dateFrom','t-dateTo','t-timeStart','t-timeEnd'].forEach(i=>document.getElementById(i).value='');
+      document.getElementById('t-weeklyDay').value='';
       document.getElementById('t-pax').value='';
       document.getElementById('t-status').value='Scheduled';
       document.getElementById('t-banner').value='';
@@ -1755,6 +1776,7 @@ function saveTraining(){
     title,
     dateFrom,
     dateTo,
+    weeklyDay:document.getElementById('t-weeklyDay').value||'',
     timeStart:document.getElementById('t-timeStart').value,
     timeEnd:document.getElementById('t-timeEnd').value,
     venue:document.getElementById('t-venue').value,
@@ -2081,21 +2103,29 @@ function renderDashboard(){
         </div>`;
       }).join('');
 
-  // Upcoming — Monday to Friday of the current week
+  // Upcoming — Monday to Friday, with week navigation
   const DAY_NAMES=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-  const _now=new Date();_now.setHours(0,0,0,0);
-  const _dow=_now.getDay();// 0=Sun..6=Sat
-  const _mondayOffset=_dow===0?-6:1-_dow;
-  const weekMonday=new Date(_now);weekMonday.setDate(_now.getDate()+_mondayOffset);
   const pad2=n=>String(n).padStart(2,'0');
   const toKey=d=>`${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`;
+  const _now=new Date();_now.setHours(0,0,0,0);
+  const _dow=_now.getDay();
+  const _mondayOffset=_dow===0?-6:1-_dow;
+  const thisWeekMonday=new Date(_now);thisWeekMonday.setDate(_now.getDate()+_mondayOffset);
+  if(typeof window._upcomingWeekOffset==='undefined') window._upcomingWeekOffset=0;
+  const weekMonday=new Date(thisWeekMonday);weekMonday.setDate(thisWeekMonday.getDate()+window._upcomingWeekOffset*7);
+  const weekFriday=new Date(weekMonday);weekFriday.setDate(weekMonday.getDate()+4);
   const weekDays=[0,1,2,3,4].map(i=>{const d=new Date(weekMonday);d.setDate(weekMonday.getDate()+i);return d;});
   const activeTrainings=trainings.filter(t=>t.dateFrom&&!['Cancelled','Postponed'].includes(t.status));
   let upcomingTotal=0;
   const rowsHtml=weekDays.map(d=>{
     const key=toKey(d);
     const dayTrainings=activeTrainings
-      .filter(t=>compareDateKey(t.dateFrom,key)<=0&&compareDateKey(effectiveEndDate(t)||t.dateFrom,key)>=0)
+      .filter(t=>{
+        const withinRange=compareDateKey(t.dateFrom,key)<=0&&compareDateKey(effectiveEndDate(t)||t.dateFrom,key)>=0;
+        if(!withinRange) return false;
+        if(t.weeklyDay) return d.getDay()===parseInt(t.weeklyDay,10);
+        return true;
+      })
       .sort((a,b)=>(a.timeStart||'').localeCompare(b.timeStart||''));
     upcomingTotal+=dayTrainings.length;
     const isToday=key===today;
@@ -2105,7 +2135,7 @@ function renderDashboard(){
       ? dayTrainings.map(t=>`
           <div class="upcoming-info" style="padding:6px 0;border-bottom:1px dashed var(--border)">
             <div class="upcoming-title">${t.title} ${badgeHtml(t.status)}</div>
-            <div class="upcoming-sub">${t.banner?`<span class="badge badge-banner" style="margin-right:5px">${bannerLabel(t.banner)}</span>`:''}${t.venue||'—'} · ${fmtTime(t.timeStart)} · ${t.pax} pax</div>
+            <div class="upcoming-sub">${t.banner?`<span class="badge badge-banner" style="margin-right:5px">${bannerLabel(t.banner)}</span>`:''}${t.venue||'\u2014'} · ${fmtTime(t.timeStart)} · ${t.pax} pax</div>
           </div>`).join('')
       : `<div class="upcoming-sub" style="padding:6px 0;font-style:italic">No trainings.</div>`;
     return`<div class="upcoming-item" style="align-items:stretch">
@@ -2116,7 +2146,12 @@ function renderDashboard(){
       <div style="flex:1">${items}</div>
     </div>`;
   }).join('');
-  document.getElementById('upcomingCount').textContent=`${upcomingTotal} this week (Mon–Fri)`;
+  const MONTHS_SHORT=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const wkLabel=window._upcomingWeekOffset===0?'This week':window._upcomingWeekOffset<0?`${Math.abs(window._upcomingWeekOffset)} week${Math.abs(window._upcomingWeekOffset)>1?'s':''} ago`:`${window._upcomingWeekOffset} week${window._upcomingWeekOffset>1?'s':''} ahead`;
+  const rangeLabel=`${MONTHS_SHORT[weekMonday.getMonth()]} ${weekMonday.getDate()} – ${MONTHS_SHORT[weekFriday.getMonth()]} ${weekFriday.getDate()}`;
+  document.getElementById('upcomingCount').textContent=`${upcomingTotal} training${upcomingTotal!==1?'s':''} · ${rangeLabel} (${wkLabel})`;
+  const todayBtn=document.getElementById('upcomingTodayBtn');
+  if(todayBtn) todayBtn.style.display=window._upcomingWeekOffset===0?'none':'inline-flex';
   document.getElementById('upcomingList').innerHTML=rowsHtml;
 
   // Banner breakdown
@@ -2152,6 +2187,15 @@ function renderDashboard(){
       <div style="font-size:12px;color:var(--muted)">${Math.round(s.count/total*100)}%</div>
     </div>
   `).join('');
+}
+
+// ═══════════════════════════════════════
+// UPCOMING WEEK NAVIGATION
+// ═══════════════════════════════════════
+function shiftUpcomingWeek(direction){
+  if(direction===0){ window._upcomingWeekOffset=0; }
+  else { if(typeof window._upcomingWeekOffset==='undefined') window._upcomingWeekOffset=0; window._upcomingWeekOffset+=direction; }
+  renderDashboard();
 }
 
 // ═══════════════════════════════════════
